@@ -42,8 +42,9 @@ jobs:
           # restrict permissions
           icacls $keyPath /inheritance:r
           $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-          # Use subexpression to safely format the ACE string
-          icacls $keyPath /grant:r "$($currentUser):(R)"
+          # Build ACE string separately to avoid parser issues and pass as argument
+          $ace = "${currentUser}:(R)"
+          icacls $keyPath /grant:r $ace
 
           # ensure remote path exists
           ssh -i $keyPath -o BatchMode=yes -o StrictHostKeyChecking=no "$($env:SERVER_USER)@$($env:SERVER_HOST)" "powershell -NoProfile -Command \"if (-Not (Test-Path -Path '$($env:REMOTE_PATH)')) { New-Item -Path '$($env:REMOTE_PATH)' -ItemType Directory | Out-Null }\""
