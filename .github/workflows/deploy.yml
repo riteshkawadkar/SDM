@@ -46,15 +46,31 @@ jobs:
           $ace = "${currentUser}:(R)"
           icacls $keyPath /grant:r $ace
 
-          # ensure remote path exists
-          ssh -i $keyPath -o BatchMode=yes -o StrictHostKeyChecking=no "$($env:SERVER_USER)@$($env:SERVER_HOST)" "powershell -NoProfile -Command \"if (-Not (Test-Path -Path '$($env:REMOTE_PATH)')) { New-Item -Path '$($env:REMOTE_PATH)' -ItemType Directory | Out-Null }\""
+          # ensure remote path exists (use Start-Process to avoid PowerShell argument parsing issues)
+          $ensureArgs = @(
+            "-i", $keyPath,
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=no",
+            "$($env:SERVER_USER)@$($env:SERVER_HOST)",
+            "powershell -NoProfile -Command \"if (-Not (Test-Path -Path '$($env:REMOTE_PATH)')) { New-Item -Path '$($env:REMOTE_PATH)' -ItemType Directory | Out-Null }\""
+          )
+          Start-Process -FilePath ssh -ArgumentList $ensureArgs -Wait -NoNewWindow
 
-          # copy files
-          scp -i $keyPath -o BatchMode=yes -o StrictHostKeyChecking=no sdm-publish.zip "$($env:SERVER_USER)@$($env:SERVER_HOST):$($env:REMOTE_PATH)"
-          scp -i $keyPath -o BatchMode=yes -o StrictHostKeyChecking=no scripts/remote-deploy.ps1 "$($env:SERVER_USER)@$($env:SERVER_HOST):$($env:REMOTE_PATH)"
+          # copy files using Start-Process
+          $scpArgs1 = @("-i", $keyPath, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "sdm-publish.zip", "$($env:SERVER_USER)@$($env:SERVER_HOST):$($env:REMOTE_PATH)")
+          Start-Process -FilePath scp -ArgumentList $scpArgs1 -Wait -NoNewWindow
+          $scpArgs2 = @("-i", $keyPath, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "scripts/remote-deploy.ps1", "$($env:SERVER_USER)@$($env:SERVER_HOST):$($env:REMOTE_PATH)")
+          Start-Process -FilePath scp -ArgumentList $scpArgs2 -Wait -NoNewWindow
 
           # run remote deploy script
-          ssh -i $keyPath -o BatchMode=yes -o StrictHostKeyChecking=no "$($env:SERVER_USER)@$($env:SERVER_HOST)" "powershell -NoProfile -ExecutionPolicy Bypass -File '$($env:REMOTE_PATH)\remote-deploy.ps1' '$($env:REMOTE_PATH)\sdm-publish.zip' '$($env:TARGET_APP_PATH)'"
+          $deployArgs = @(
+            "-i", $keyPath,
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=no",
+            "$($env:SERVER_USER)@$($env:SERVER_HOST)",
+            "powershell -NoProfile -ExecutionPolicy Bypass -File '$($env:REMOTE_PATH)\\remote-deploy.ps1' '$($env:REMOTE_PATH)\\sdm-publish.zip' '$($env:TARGET_APP_PATH)'"
+          )
+          Start-Process -FilePath ssh -ArgumentList $deployArgs -Wait -NoNewWindow
 
           # remove key
           Remove-Item -Path $keyPath -Force
