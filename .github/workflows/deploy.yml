@@ -26,22 +26,33 @@ jobs:
           if (Test-Path sdm-publish.zip) { Remove-Item sdm-publish.zip -Force }
           Compress-Archive -Path publish/* -DestinationPath sdm-publish.zip
 
-      - name: Copy publish and deploy script to server (SCP)
-        uses: appleboy/scp-action@master
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          port: '22'
-          source: "sdm-publish.zip,scripts/remote-deploy.ps1"
-          target: ${{ secrets.REMOTE_PATH }}
+      - name: Copy and deploy using SSH key file (PowerShell)
+        shell: pwsh
+        env:
+          SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          REMOTE_PATH: ${{ secrets.REMOTE_PATH }}
+          TARGET_APP_PATH: ${{ secrets.TARGET_APP_PATH }}
+        run: |
+          $keyPath = Join-Path $env:RUNNER_TEMP 'deploy_key'
+          # write private key to file without adding extra newlines
+          Set-Content -Path $keyPath -Value $env:SSH_KEY -NoNewline -Encoding utf8
 
-      - name: Run remote deploy script (SSH)
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          port: '22'
-          script: |
-            powershell -NoProfile -ExecutionPolicy Bypass -File "${{ secrets.REMOTE_PATH }}\remote-deploy.ps1" "${{ secrets.REMOTE_PATH }}\sdm-publish.zip" "${{ secrets.TARGET_APP_PATH }}"
+          # restrict permissions
+          icacls $keyPath /inheritance:r
+          $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+          icacls $keyPath /grant:r "$currentUser:(R)"
+
+          # ensure remote path exists
+          ssh -i $keyPath -o BatchMode=yes -o StrictHostKeyChecking=no "$($env:SERVER_USER)@$($env:SERVER_HOST)" "powershell -NoProfile -Command \"if (-Not (Test-Path -Path '$($env:REMOTE_PATH)')) { New-Item -Path '$($env:REMOTE_PATH)' -ItemType Directory | Out-Null }\""
+
+          # copy files
+          scp -i $keyPath -o BatchMode=yes -o StrictHostKeyChecking=no sdm-publish.zip "$($env:SERVER_USER)@$($env:SERVER_HOST):$($env:REMOTE_PATH)"
+          scp -i $keyPath -o BatchMode=yes -o StrictHostKeyChecking=no scripts/remote-deploy.ps1 "$($env:SERVER_USER)@$($env:SERVER_HOST):$($env:REMOTE_PATH)"
+
+          # run remote deploy script
+          ssh -i $keyPath -o BatchMode=yes -o StrictHostKeyChecking=no "$($env:SERVER_USER)@$($env:SERVER_HOST)" "powershell -NoProfile -ExecutionPolicy Bypass -File '$($env:REMOTE_PATH)\remote-deploy.ps1' '$($env:REMOTE_PATH)\sdm-publish.zip' '$($env:TARGET_APP_PATH)'"
+
+          # remove key
+          Remove-Item -Path $keyPath -Force
