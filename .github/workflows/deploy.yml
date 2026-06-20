@@ -53,8 +53,9 @@ jobs:
           Start-Process -FilePath scp -ArgumentList $scpArgs2 -Wait -NoNewWindow
 
           # run remote deploy script (construct remote command safely)
-          $remoteCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File \"$($env:REMOTE_PATH)\\remote-deploy.ps1\" \"$($env:REMOTE_PATH)\\sdm-publish.zip\" \"$($env:TARGET_APP_PATH)\""
-          $deployArgs = @("-i", $keyPath, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "$($env:SERVER_USER)@$($env:SERVER_HOST)", $remoteCommand)
+          # construct remote command using concatenation to avoid inline $() parsing
+          $remoteCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + ($env:REMOTE_PATH + '\\remote-deploy.ps1') + '" "' + ($env:REMOTE_PATH + '\\sdm-publish.zip') + '" "' + $env:TARGET_APP_PATH + '"'
+          $deployArgs = @('-i', $keyPath, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', "$($env:SERVER_USER)@$($env:SERVER_HOST)", $remoteCommand)
           Start-Process -FilePath ssh -ArgumentList $deployArgs -Wait -NoNewWindow
 
           # remove key
