@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="SDM.API/SDM.API.csproj" />
+  <Project Path="SDM.Application/SDM.Application.csproj" />
+  <Project Path="SDM.Domain/SDM.Domain.csproj" />
+  <Project Path="SDM.Infrastructure/SDM.Infrastructure.csproj" />
+</Solution>

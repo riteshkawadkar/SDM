@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+	<TargetFramework>net8.0</TargetFramework>
+	<AssemblyName>BCrypt-Net-Next</AssemblyName>
+	<RootNamespace>BCrypt.Net</RootNamespace>
+  </PropertyGroup>
+  <!-- Dapper.cs is already included by SDK default Compile items; keep file in project folder so it builds into the shim assembly -->
+</Project>

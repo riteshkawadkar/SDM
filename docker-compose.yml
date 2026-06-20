@@ -1,0 +1,29 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:15
+    container_name: sdm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sdm_user
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: sdm_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - sdm_pgdata:/var/lib/postgresql/data
+
+  pgadmin:
+    image: dpage/pgadmin4:7
+    container_name: sdm-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@local.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "8081:80"
+    depends_on:
+      - db
+
+volumes:
+  sdm_pgdata:

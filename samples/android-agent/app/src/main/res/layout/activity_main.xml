@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Device Registration"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="24dp"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Device Identifier:"
+        android:textStyle="bold"/>
+    <TextView
+        android:id="@+id/tvDeviceId"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="N/A"
+        android:layout_marginBottom="8dp"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Manufacturer:"
+        android:textStyle="bold"/>
+    <TextView
+        android:id="@+id/tvManufacturer"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="N/A"
+        android:layout_marginBottom="8dp"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Model:"
+        android:textStyle="bold"/>
+    <TextView
+        android:id="@+id/tvModel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="N/A"
+        android:layout_marginBottom="8dp"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Android Version:"
+        android:textStyle="bold"/>
+    <TextView
+        android:id="@+id/tvAndroidVersion"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="N/A"
+        android:layout_marginBottom="8dp"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Serial Number:"
+        android:textStyle="bold"/>
+    <TextView
+        android:id="@+id/tvSerialNumber"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="N/A"
+        android:layout_marginBottom="16dp"/>
+
+    <TextView
+        android:id="@+id/tvTokenStatus"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Token: None"
+        android:layout_marginBottom="8dp"
+        android:textColor="@android:color/holo_red_dark"/>
+
+    <TextView
+        android:id="@+id/tvServerUrl"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Server: N/A"
+        android:layout_marginBottom="8dp"/>
+
+    <TextView
+        android:id="@+id/tvMdmStatus"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="MDM Status: Checking..."
+        android:layout_marginBottom="24dp"
+        android:textStyle="italic"/>
+
+    <Button
+        android:id="@+id/btnEnroll"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Enroll Device"
+        android:enabled="false"/>
+
+    <TextView
+        android:id="@+id/tvStatus"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text=""/>
+
+</LinearLayout>
