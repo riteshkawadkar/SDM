@@ -35,6 +35,7 @@ services:
       DB_HOST: db
       DB_PORT: 5432
       DB_USER: sdm_user
+      ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=sdm_db;Username=sdm_user;Password=secret"
     ports:
       - "5254:5254"
