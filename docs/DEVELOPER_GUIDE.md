@@ -1,224 +1,434 @@
-# SecureDeviceManager (SDM) — Developer Understanding Guide
+# SecureDeviceManager (SDM) — Developer Guide
 
-This document is intended to help a new developer quickly understand, run, debug, and extend the SecureDeviceManager backend. It covers repository layout, the technology choices and rationale, the domain model and entity relationships, high-level architecture, agent communication flows (enrollment, heartbeat, push tokens), operational and debugging steps (including using Visual Studio 2026 and ngrok), and recommended next steps for contributors.
+This document helps a new developer quickly understand, run, debug, and extend SecureDeviceManager. It covers repository layout, technology choices, the domain model, architecture, all communication flows (enrollment, heartbeat, commands, unenroll), and operational/debugging guidance.
 
 ---
 
-## 1. Project overview
+## 1. Project Overview
 
-SecureDeviceManager (SDM) is a backend platform for enrolling and managing mobile devices (agents). It provides:
-- Enrollment token generation (QR / deep link)
+SecureDeviceManager (SDM) is a backend platform for enrolling and remotely managing Android devices. It provides:
+
+- Enrollment token generation (QR code / deep link)
 - Device registration using enrollment tokens
-- Heartbeat ingestion
-- Push token management (FCM)
-- Background processing of commands via Hangfire
-
-The backend is organized as multiple projects (logical layers):
-- SDM.API — ASP.NET Minimal / Controller-based Web API (entry point)
-- SDM.Infrastructure — Implementations of services, data access (EF Core), Hangfire jobs
-- SDM.Application — DTOs, interface definitions and cross-cutting application services
-- SDM.Domain — domain entities (Device, EnrollmentToken, User, Role, AuditLog, etc.)
-
-This layering follows clean architecture principles: controllers depend on application interfaces, implementations live in Infrastructure, and domain models are centralized in Domain.
-
-## 2. Tech stack and why it was chosen
-
-- .NET 8 (C#): Modern, high-performance, supported LTS for building scalable web APIs and background services.
-- ASP.NET Web API (Controllers): Straightforward mapping of REST endpoints and MVC-style controllers for HTML rendering during development (enroll form).
-- Entity Framework Core + Npgsql (PostgreSQL): Familiar ORM, migrations, transactional DB access, and PostgreSQL as a robust production database.
-- Hangfire: Background job scheduling and execution for recurring or deferred tasks (processing pending commands, etc.). Works with Postgres storage.
-- JWT (System.IdentityModel.Tokens / Microsoft.AspNetCore.Authentication.JwtBearer): Lightweight token-based authentication for device/user tokens.
-- QRCoder: Generate QR codes for enrollment payloads.
-- FCM (Firebase Cloud Messaging) — implied via push token management: used to deliver push notifications to devices.
-- ngrok (dev): Expose local server to device over the internet for testing without deploying.
-
-Rationale: each component is industry-standard for its role (ORM, background jobs, authentication) and integrates well with .NET.
-
-## 3. Code structure and key files
-
-- SDM.API/
-  - Program.cs — application bootstrapping (services, authentication, Hangfire, MapControllers)
-  - Controllers/EnrollmentController.cs — developer-facing enrollment pages and token QR endpoints
-  - Properties/launchSettings.json — profiles for local debugging (http, https, IIS Express)
-
-- SDM.Infrastructure/
-  - Services/DeviceService.cs — core device registration, heartbeat, push token logic
-  - Services/PushService.cs, CommandService.cs, HangfireJobs.cs — background and push related logic (services referenced in Program.cs)
-  - Data/ApplicationDbContext.cs — EF Core DbContext and DbSets (entities)
-
-- SDM.Application/
-  - DTOs/* — request/response DTOs (DeviceRegisterWithTokenRequest, Enrollment DTOs)
-  - Interfaces/* — service interfaces (IDeviceService, IAuthService, IJwtTokenGenerator)
-
-- SDM.Domain/
-  - Entities/* — domain entities (Device, EnrollmentToken, DevicePushToken, DeviceHeartbeat, AuditLog, User, Role)
-
-If you need start points: set breakpoints in Program.cs, EnrollmentController.EnrollForm (dev HTML), and DeviceService.RegisterWithTokenAsync.
-
-## 4. Domain model (ERD / relationships)
-
-This is a textual ERD that describes principal entities and relations (implementations live in SDM.Domain.Entities):
-
-- Device
-  - Id (PK), DeviceIdentifier (unique), SerialNumber, Manufacturer, Model, AndroidVersion, Status, CreatedOn, UpdatedOn, LastSeen, BatteryLevel
-  - Relationships:
-	- 1 Device -> * DevicePushToken
-	- 1 Device -> * DeviceHeartbeat
-
-- EnrollmentToken
-  - Id (PK), Token (string), ExpiresOn (UTC), MaxDevices (int), IsActive (bool)
-  - Used to gate enrollment operations. Token.MaxDevices is decremented on device register.
-
-- DevicePushToken
-  - Id, DeviceId (FK), Token (FCM token), IsActive, CreatedOn
-
-- DeviceHeartbeat
-  - Id, DeviceId (FK), BatteryLevel, FreeStorage, Latitude, Longitude, CreatedOn
-
-- AuditLog
-  - Id, Action, EntityName, EntityId, NewValue (JSON), Timestamp
-
-- User and Role
-  - Minimal user model used to generate JWTs; device-specific pseudo-user objects are created in memory when generating a device JWT (not persisted).
-
-Notes on constraints and integrity:
-- EnrollmentToken.MaxDevices controls how many devices can use the token. When it reaches 0, IsActive is set to false.
-- DeviceIdentifier should be unique — used to detect existing device registrations and update metadata.
-
-## 5. High-level architecture (HLD)
-
-Components:
-- API Layer (SDM.API)
-  - Exposes endpoints for: token generation, QR generation, enrollment form (dev), device registration endpoints (via controllers), heartbeats, push token registration and any management operations.
-
-- Services Layer (SDM.Infrastructure)
-  - Business logic for registering devices, validating tokens, saving heartbeats, registering push tokens, creating audit logs, and generating JWTs.
-
-- Data Layer (Postgres via EF Core)
-  - Persistent storage for devices, tokens, audit logs, jobs, etc.
-
-- Background Jobs (Hangfire)
-  - Recurring tasks (e.g., process pending commands, cleanup tasks).
-
-- Agents (Android / iOS)
-  - Mobile/agent apps or device management clients that:
-	- Initiate enrollment using QR / deep link that includes enrollment token
-	- POST registration payloads to API endpoints (register-with-token)
-	- Periodically POST heartbeats
-	- Register FCM token for push notifications
-
-Flows:
-- Enrollment flow (high-level):
-  1. Admin creates an enrollment token via POST /api/enrollment/tokens (or uses test QR endpoint).
-  2. Token is delivered to device via QR or deep link (payload: sdm://enroll?token=... or a JSON payload for test QR).
-  3. Device opens enroll UI and posts DeviceRegisterWithTokenRequest to POST /api/devices/register-with-token.
-  4. Server validates token, creates/updates Device record, registers FCM token if supplied, decrements token usage and returns Device JWT.
-
-- Heartbeat and command flows: devices POST heartbeats; server records DeviceHeartbeat rows and may queue commands for agents. Hangfire background jobs may process queued commands and send push notifications via FCM using recorded push tokens.
-
-## 6. Agent communication details
-
-Endpoints of interest:
-- POST /api/enrollment/tokens — create tokens (controller: EnrollmentController)
-- POST /api/enrollment/tokens/generate-qr/test — dev QR endpoint returns HTML with token and QR (allow anonymous)
-- GET /enroll?token=... — quickly renders a small HTML form for manual testing (AllowAnonymous)
-
-Missing or incomplete pieces to validate before manual testing:
-- POST /api/devices/register-with-token — The server logic exists (DeviceService.RegisterWithTokenAsync), but verify there is a controller action exposing this route. If missing, implement a DevicesController with an [AllowAnonymous] POST endpoint that accepts DeviceRegisterWithTokenRequest and calls IDeviceService.RegisterWithTokenAsync.
-
-Payload shape for registration (DeviceRegisterWithTokenRequest):
-- Token: string
-- DeviceIdentifier: string
-- SerialNumber: string
-- Manufacturer, Model, AndroidVersion: string
-- Optional FcmToken: string
-
-Returned payload (DeviceRegisterWithTokenResponse):
-- DeviceId: GUID
-- DeviceJwt: string
-- ExpiresInSeconds: int
-
-Security considerations:
-- Enrollment endpoints used during initial registration should allow anonymous access (device has no JWT yet) but must strictly validate enrollment tokens.
-- Ensure HTTPS in production; for development ngrok can provide secure tunnels.
-
-## 7. How to run & debug (Visual Studio 2026)
-
-1. Open the solution: D:\Users\rites\source\repos\SecureDeviceManager\src\backend\SDM\SDM.slnx
-2. Set the startup project to SDM.API (right-click > Set as Startup Project).
-3. Select the launch profile (in the Visual Studio toolbar): choose the "https" profile from SDM.API/Properties/launchSettings.json. That profile exposes https://localhost:7288 and http://localhost:5254.
-4. Place breakpoints in relevant files (Program.cs, EnrollmentController.cs, DeviceService.cs).
-5. Press F5 (Start Debugging). Visual Studio will build, run the app, and attach the debugger.
-
-Notes for ngrok testing:
-- Run ngrok forwarding to the same local port the app is listening on. Example (PowerShell):
-  - ngrok http 5254
-  - or for HTTPS endpoint: ngrok http 7288 --host-header="localhost:7288"
-- Use the ngrok public URL for the QR deep link or open that URL on the device: https://<your-ngrok-id>.ngrok-free.dev/enroll?token=...
-
-If you need to expose on port 80 (your provided command), either change applicationUrl to use port 80 (requires admin) or run a local reverse proxy to map 5254→80.
-
-## 8. Common troubleshooting and investigation steps
-
-- If the device POST to /api/devices/register-with-token returns 404:
-  - Verify a controller action is mapped for that route.
-  - Check Program.cs that MapControllers() is enabled (it is).
-  - Inspect app console logs for routing failures.
-
-- If request returns 401:
-  - Ensure the devices endpoint allows anonymous access during enrollment. Add [AllowAnonymous] to the controller action.
-
-- If request returns 500 or exception:
-  - Attach debugger and reproduce; the exception stack will reveal root cause (DB connectivity, model binding issues, null refs).
-  - Check database rows for EnrollmentTokens (ExpiresOn, IsActive, MaxDevices) to ensure token is valid.
-
-- If token validation fails:
-  - Confirm time skew (server UTC vs device). ExpiresOn is compared to DateTime.UtcNow.
-  - Confirm token string matches exactly (HTML encoding, double-encoding issues when building deep link).
-
-- If device post reaches server but DeviceService throws "Enrollment token has no remaining device slots":
-  - Check token.MaxDevices value in DB. For test flows, create tokens with MaxDevices >= 1.
-
-## 9. Recommended immediate fixes / improvements
-
-1. Verify existence of DevicesController exposing POST /api/devices/register-with-token. If missing, add it and mark endpoint [AllowAnonymous].
-2. Add structured logging (ILogger<T>) in controllers and DeviceService to capture enrollment attempts, token values (redact token in logs), and exceptions.
-3. Add integration tests for the enrollment flow using WebApplicationFactory (Program partial is exposed) to simulate token creation and device registration.
-4. Enable CORS only for development if the enrollment form is hosted on a different origin (ngrok vs localhost).
-5. Add database migration and seeding scripts for Roles (Viewer) referenced when generating device pseudo-user claims.
-
-## 10. Onboarding checklist for a new developer (step-by-step)
-
-1. Pull the repository and open solution in Visual Studio 2026.
-2. Run the database locally (Postgres) and set connection string in appsettings.Development.json (DefaultConnection).
-3. Run EF Core migrations: dotnet ef database update (ensure correct startup project and tools installed).
-4. Set SDM.API as startup; pick https profile and start debugging (F5).
-5. Create an enrollment token via Swagger or curl and use the test QR endpoint to view token and QR.
-6. Start ngrok pointed at 5254 (or 7288) and open the enroll page on your test device using the ngrok URL.
-7. Click enroll on the device; observe server logs and breakpoints.
-
-## 11. Long-term / architectural suggestions
-
-- Add a dedicated DevicesController that surfaces all device-related endpoints in one place.
-- Add API versioning and a brief OpenAPI documentation for production.
-- Move QR and test endpoints behind a development-only feature flag so production does not expose dev utilities.
-- Add RBAC for enrollment token creation and management (only admins).
-- Harden token generation (token entropy) and optionally allow single-use tokens.
-
-## 12. Useful commands and snippets
-
-- Start dev server (Visual Studio): F5
-- Create token (curl):
-  curl -k -X POST https://localhost:7288/api/enrollment/tokens -H "Content-Type: application/json" -d '{"ExpiresInMinutes":30,"MaxDevices":1}'
-- Start ngrok:
-  ngrok http 5254
-- adb deep link (open app or open browser):
-  adb shell am start -a android.intent.action.VIEW -d "https://<ngrok-domain>/enroll?token=THE_TOKEN"
+- Remote command delivery via Firebase Cloud Messaging (FCM)
+- Command status reporting from device back to server
+- Periodic heartbeat ingestion (battery, storage, last-seen)
+- FCM push token management
+- Background command retry processing via Hangfire
+- Audit logging for all device lifecycle events
 
 ---
 
-If you want, I can:
-- Add a DevicesController skeleton and wire up the POST /api/devices/register-with-token endpoint (AllowAnonymous) so enrollment flow is complete.
-- Add logging statements and a small integration test that proves enrollment works end-to-end in the test environment.
+## 2. Tech Stack
 
-Save location: docs/DEVELOPER_GUIDE.md
+| Technology | Role |
+|---|---|
+| .NET 8 / ASP.NET Core | Web API host |
+| Entity Framework Core + Npgsql | ORM + PostgreSQL access |
+| PostgreSQL | Persistent storage |
+| Hangfire | Background job scheduling (command retry) |
+| Firebase Cloud Messaging (HTTP v1) | Push commands to Android devices |
+| JWT (Microsoft.AspNetCore.Authentication.JwtBearer) | Auth for users and devices |
+| QRCoder | Generate enrollment QR codes |
+| Docker / Docker Compose | Container runtime (API + Postgres + pgAdmin) |
+
+**Firebase uses the HTTP v1 API** with a service account JSON (`firebase-sa.json`). It falls back to the legacy `Firebase:ServerKey` if the JSON is absent.
+
+---
+
+## 3. Repository Layout
+
+```
+src/backend/SDM/
+├── SDM.API/                    # Web API entry point
+│   ├── Controllers/
+│   │   ├── AuthController.cs
+│   │   ├── DevicesController.cs
+│   │   ├── CommandsController.cs
+│   │   └── EnrollmentController.cs
+│   ├── Program.cs              # DI wiring, middleware, Hangfire setup
+│   ├── appsettings.json
+│   ├── appsettings.Development.json
+│   └── firebase-sa.json        # NOT committed — place manually (see §7)
+│
+├── SDM.Application/            # Interfaces, DTOs, settings (no infra deps)
+│   ├── DTOs/
+│   └── Interfaces/
+│
+├── SDM.Infrastructure/         # EF Core, service implementations, jobs
+│   ├── Data/ApplicationDbContext.cs
+│   ├── Migrations/
+│   └── Services/
+│       ├── DeviceService.cs
+│       ├── CommandService.cs
+│       ├── PushService.cs
+│       └── HangfireJobs.cs
+│
+├── SDM.Domain/                 # Entities and enums
+│   └── Entities/
+│
+├── samples/android-agent/      # Reference Android MDM agent (gitignored)
+└── docs/
+    └── DEVELOPER_GUIDE.md      # This file
+```
+
+Dependency direction: `Domain ← Application ← Infrastructure ← API`
+
+---
+
+## 4. Domain Model
+
+### Entities
+
+**Device**
+`Id`, `DeviceIdentifier` (unique — ANDROID_ID), `SerialNumber`, `Manufacturer`, `Model`, `AndroidVersion`, `Status`, `BatteryLevel`, `LastSeen`, `CreatedOn`, `UpdatedOn`
+
+**EnrollmentToken**
+`Id`, `Token`, `ExpiresOn`, `MaxDevices`, `IsActive`
+— `MaxDevices` is decremented on each new device enrollment; token deactivates when it hits 0.
+
+**DevicePushToken**
+`Id`, `DeviceId` (FK), `Token` (FCM registration token), `IsActive`, `CreatedOn`
+— No cascade delete configured; `DeviceService.DeleteAsync` removes these explicitly.
+
+**DeviceCommand**
+`Id`, `DeviceId` (FK), `CommandType`, `Payload`, `Status` (`Pending=0, Sent=1, Executed=2, Failed=3`), `RetryCount`, `CreatedOn`, `ExecutedOn`
+— Cascade deleted when device is removed.
+
+**DeviceHeartbeat**
+`Id`, `DeviceId` (FK), `BatteryLevel`, `FreeStorage`, `Latitude`, `Longitude`, `CreatedOn`
+— Cascade deleted when device is removed.
+
+**AuditLog**
+`Id`, `Action`, `EntityName`, `EntityId`, `NewValue` (JSON), `Timestamp`
+
+**User / Role**
+Minimal user model for JWT generation. Device JWTs use an in-memory pseudo-user (not persisted) with `sub` = device GUID and role `"Device"`.
+
+---
+
+## 5. Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│                   SDM.API                        │
+│  AuthController  DevicesController               │
+│  CommandsController  EnrollmentController        │
+└──────────────┬──────────────────────────────────┘
+               │ IDeviceService / ICommandService
+               │ IPushService / IAuthService
+┌──────────────▼──────────────────────────────────┐
+│              SDM.Infrastructure                  │
+│  DeviceService   CommandService   PushService    │
+│  HangfireJobs    ApplicationDbContext            │
+└──────┬───────────────────────────────┬──────────┘
+       │ EF Core                       │ HTTP v1
+┌──────▼──────┐               ┌────────▼────────┐
+│  PostgreSQL  │               │  Firebase FCM   │
+└─────────────┘               └─────────────────┘
+                                       │ FCM push
+                               ┌───────▼─────────┐
+                               │  Android Agent   │
+                               │  (FCMService)    │
+                               └─────────────────┘
+```
+
+---
+
+## 6. End-to-End Flows
+
+### 6.1 Device Enrollment
+
+```
+Admin                    Backend                      Android Agent
+  │                         │                               │
+  ├─POST /enrollment/tokens─▶│                               │
+  │◀── token string ─────────┤                               │
+  │                         │                               │
+  │  (QR code / deep link)  │                               │
+  │─────────────────────────────────────────────────────────▶│
+  │                         │                               │
+  │                         │◀─POST /devices/register-with-token
+  │                         │  {token, deviceIdentifier,    │
+  │                         │   manufacturer, model,        │
+  │                         │   androidVersion, fcmToken}   │
+  │                         │                               │
+  │                         │ • validate token              │
+  │                         │ • create/update Device row    │
+  │                         │ • save FCM token              │
+  │                         │ • decrement token.MaxDevices  │
+  │                         │ • generate device JWT         │
+  │                         │                               │
+  │                         ├──{deviceId, deviceJwt}───────▶│
+  │                         │                               │
+  │                         │          • save JWT + deviceId to EncryptedSharedPrefs
+  │                         │          • schedule HeartbeatWorker (15 min)
+```
+
+Key points:
+- Re-enrolling the **same** device (same `DeviceIdentifier`) updates metadata but does **not** decrement the token slot.
+- FCM token is registered via `RegisterPushTokenAsync` which deduplicates — existing token rows are reactivated rather than duplicated.
+
+### 6.2 Heartbeat
+
+The `HeartbeatWorker` (WorkManager, 15-minute interval, requires network) calls:
+
+```
+POST /api/devices/{deviceId}/heartbeat
+Authorization: Bearer <device-jwt>
+{ "battery": 85, "freeStorage": 12345678 }
+```
+
+Backend updates `Device.BatteryLevel`, `Device.LastSeen`, and inserts a `DeviceHeartbeat` row.
+
+### 6.3 Command Delivery
+
+```
+Admin                    Backend                      Android Agent
+  │                         │                               │
+  ├─POST /devices/{id}/commands
+  │  {commandType:"LockScreen", payload:""}                 │
+  │                         │                               │
+  │                         │ 1. Save DeviceCommand (Pending)
+  │                         │ 2. Query DevicePushTokens     │
+  │                         │ 3. POST to FCM HTTP v1 ───────▶ FCM
+  │                         │    data: {                    │
+  │                         │      "body": "LockScreen",    │
+  │                         │      "payload": {"commandId":"...", "payload":""}
+  │                         │    }                          │
+  │                         │ 4. Status → Sent (or Failed)  │
+  │◀── 201 {id, status:1} ──┤                               │
+  │                         │          FCM delivers ────────▶│
+  │                         │                               │ onMessageReceived
+  │                         │                               │ • read data["body"] → "LockScreen"
+  │                         │                               │ • extract commandId from data["payload"]
+  │                         │                               │ • dpm.lockNow()
+  │                         │                               │
+  │                         │◀──POST /devices/{id}/commands/{cid}/status
+  │                         │   {success: true}             │
+  │                         │                               │
+  │                         │ Status → Executed             │
+```
+
+**FCM data message keys** (important for Android-side parsing):
+
+| Key | Value |
+|-----|-------|
+| `body` | command type string (e.g. `"LockScreen"`) |
+| `payload` | JSON string `{"commandId":"<uuid>","payload":"<value>"}` |
+
+**Command retry:** `HangfireJobs.ProcessPendingCommands` runs every minute and reprocesses `Pending`/`Failed` commands up to `MaxRetries` (default 5).
+
+### 6.4 Supported Commands
+
+| CommandType | Required privilege | Action |
+|---|---|---|
+| `LockScreen` | Device Admin | `DevicePolicyManager.lockNow()` |
+| `DisableApp` | Device Owner | Hide app package |
+| `EnableApp` | Device Owner | Show app package |
+| `LockApp` | Device Owner | Pin app via `setLockTaskPackages` |
+| `InstallApp` | None | Download APK + silent install |
+| `WipeData` | Device Owner | Factory reset (disabled by default) |
+
+Device Admin is granted via the UI button in the agent. Device Owner requires ADB provisioning: `adb shell dpm set-device-owner com.example.sdmagent/.AdminReceiver`.
+
+### 6.5 FCM Token Refresh
+
+When Firebase issues a new FCM token (e.g. after app reinstall), `FCMService.onNewToken` calls:
+
+```
+POST /api/devices/update-fcm-token
+Authorization: Bearer <device-jwt>
+{ "fcmToken": "<new-token>" }
+```
+
+The backend reads `sub` from the JWT to identify the device and calls `RegisterPushTokenAsync`.
+
+### 6.6 Unenroll
+
+```
+Android Agent                Backend
+     │                          │
+     ├─DELETE /api/devices/{id}─▶│
+     │                          │ • remove DevicePushTokens (explicit)
+     │                          │ • remove Device (cascades Commands + Heartbeats)
+     │                          │ • write AuditLog
+     │◀── 204 No Content ───────┤
+     │                          │
+     • clear EncryptedSharedPrefs
+     • cancel HeartbeatWorker (WorkManager)
+```
+
+`DELETE /api/devices/{id}` is `[AllowAnonymous]` for development convenience. Add an admin role requirement before production.
+
+---
+
+## 7. Configuration
+
+### appsettings.json / appsettings.Development.json
+
+```json
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Host=localhost;Port=5432;Database=sdm_db;Username=sdm_user;Password=secret"
+  },
+  "Jwt": {
+    "Issuer": "sdm-api",
+    "Audience": "sdm-client",
+    "Key": "<min 32-char secret>",
+    "ExpiryMinutes": 480
+  },
+  "Firebase": {
+    "ServiceAccountPath": "firebase-sa.json"
+  },
+  "Hangfire": {
+    "Enabled": true
+  }
+}
+```
+
+### Firebase Service Account JSON
+
+1. Firebase Console → Project Settings → Service Accounts → **Generate new private key**
+2. Download the JSON and place it at `SDM.API/firebase-sa.json`
+3. This file is gitignored — never commit it
+
+**Docker volume mount pitfall:** Docker creates a directory at the mount path if the source file doesn't exist at container creation time. If this happens:
+```bash
+sudo rm -rf ~/SDM/SDM.API/firebase-sa.json   # remove the bad directory
+# copy the real file here, then:
+docker compose down && docker compose up -d   # full recreate, not just restart
+```
+
+---
+
+## 8. Running Locally
+
+```powershell
+# Start Postgres + pgAdmin
+docker compose up -d
+
+# Apply migrations
+dotnet ef database update \
+  --project "SDM.Infrastructure/SDM.Infrastructure.csproj" \
+  --startup-project "SDM.API/SDM.API.csproj"
+
+# Run the API
+$Env:ASPNETCORE_ENVIRONMENT='Development'
+dotnet run --project "SDM.API/SDM.API.csproj"
+```
+
+- Swagger: `http://localhost:<port>/swagger`
+- Hangfire: `http://localhost:<port>/hangfire`
+- pgAdmin: `http://localhost:8081` (admin@local.com / admin)
+
+For testing with a real device, expose the local port via ngrok:
+```bash
+ngrok http 5254
+```
+Use the ngrok HTTPS URL as the server URL in the Android agent.
+
+---
+
+## 9. Running on Azure VM (Docker)
+
+```bash
+cd ~/SDM
+# Place firebase-sa.json at ~/SDM/SDM.API/firebase-sa.json first
+docker compose up -d
+
+# Apply migrations
+docker exec sdm-api dotnet ef database update \
+  --project SDM.Infrastructure/SDM.Infrastructure.csproj \
+  --startup-project SDM.API/SDM.API.csproj
+```
+
+The NSG must allow inbound TCP on port 5254 from your IP.
+
+---
+
+## 10. Debugging
+
+### Visual Studio
+
+1. Open `SDM.slnx`
+2. Set startup project to `SDM.API`
+3. Choose the `http` or `https` launch profile
+4. F5 — debugger attaches; set breakpoints in `DeviceService.cs`, `CommandService.cs`, `PushService.cs`
+
+### Useful breakpoints
+
+| File | What to investigate |
+|------|---------------------|
+| `DeviceService.RegisterWithTokenAsync` | Token validation, device creation, FCM token registration |
+| `PushService.SendToDeviceAsync` | FCM push logic, token lookup |
+| `HangfireJobs.ProcessPendingCommands` | Retry logic |
+| `CommandService.ReportCommandStatusAsync` | Status update from device |
+
+---
+
+## 11. Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| `401` on enrollment endpoint | Missing `[AllowAnonymous]` | `register-with-token` and `register` are already anonymous |
+| `"Invalid or expired enrollment token"` | Token expired or `IsActive=false` | Create a new token; check `MaxDevices > 0` and `ExpiresOn` |
+| `"Enrollment token has no remaining device slots"` | `MaxDevices` hit 0 | Create a new token with a higher `MaxDevices` |
+| `pushTokens: []` in GET /devices | `GetAllAsync` doesn't `.Include(PushTokens)` | Expected — `PushService` queries `DevicePushTokens` directly; the display is cosmetic |
+| `"Neither Firebase ServiceAccountPath nor ServerKey configured"` | `firebase-sa.json` missing or mounted as directory | See §7 Docker pitfall |
+| `FCM HTTP v1 send failed: 401` | Service account lacks FCM permissions | Grant `Firebase Cloud Messaging API` role in GCP IAM |
+| `status: 3` (Failed) immediately after command | FCM push failed | Check `docker logs sdm-api 2>&1 \| grep -A3 PushService` |
+| Screen does not lock despite `status: 1` (Sent) | Device Admin not active | Tap "Enable Device Admin" in the agent app |
+| `LockScreen` logs `SecurityException` | `dpm.isAdminActive` returns false | Grant Device Admin (see above) |
+| FCM token not updating after reinstall | `onNewToken` requires a saved JWT | Re-enroll the device; `onNewToken` skips upload if no JWT is stored |
+
+---
+
+## 12. API Reference
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/api/auth/login` | None | Get user JWT |
+| POST | `/api/enrollment/tokens` | Admin JWT | Create enrollment token |
+| POST | `/api/enrollment/tokens/generate-qr` | Admin JWT | Create token + QR image |
+| POST | `/api/devices/register-with-token` | None | Enroll device |
+| GET | `/api/devices` | None | List all devices |
+| GET | `/api/devices/{id}` | JWT | Get device by ID |
+| DELETE | `/api/devices/{id}` | None* | Delete/unenroll device |
+| POST | `/api/devices/{id}/heartbeat` | Device JWT | Update battery + lastSeen |
+| POST | `/api/devices/{id}/push-token` | Device JWT | Register FCM token |
+| POST | `/api/devices/update-fcm-token` | Device JWT | Refresh FCM token |
+| POST | `/api/devices/{id}/commands` | JWT | Send command to device |
+| POST | `/api/devices/{id}/commands/{cid}/status` | Device JWT | Report command result |
+
+\* `[AllowAnonymous]` for dev convenience — restrict before production.
+
+---
+
+## 13. Onboarding Checklist
+
+- [ ] Clone repo, open `SDM.slnx` in Visual Studio
+- [ ] Run `docker compose up -d` (Postgres + pgAdmin)
+- [ ] Apply EF migrations (`dotnet ef database update ...`)
+- [ ] Place `firebase-sa.json` in `SDM.API/`
+- [ ] Start API (F5 or `dotnet run`)
+- [ ] Create enrollment token via Swagger (`POST /api/enrollment/tokens`)
+- [ ] Get QR via `POST /api/enrollment/tokens/generate-qr`
+- [ ] Install the Android agent APK (from `samples/android-agent/`)
+- [ ] Tap "Enable Device Admin" in the app
+- [ ] Scan QR — verify device appears in `GET /api/devices`
+- [ ] Send `POST /api/devices/{id}/commands` with `"commandType": "LockScreen"` — screen should lock
+
+---
+
+## 14. Production Hardening Checklist
+
+- [ ] Add admin role requirement to `DELETE /api/devices/{id}`
+- [ ] Restrict `GET /api/devices` to authenticated users
+- [ ] Enable HTTPS only; remove HTTP redirect exception
+- [ ] Rotate JWT signing key and store in Key Vault / environment secret
+- [ ] Move Hangfire dashboard behind admin auth
+- [ ] Enable device heartbeat timeout detection (mark device offline if `LastSeen > N minutes`)
+- [ ] Add RBAC for enrollment token creation
+- [ ] Add integration tests using `WebApplicationFactory`
+- [ ] Set up log aggregation (e.g. Application Insights, Seq)

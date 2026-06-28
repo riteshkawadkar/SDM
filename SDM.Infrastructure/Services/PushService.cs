@@ -64,17 +64,13 @@ namespace SDM.Infrastructure.Services
                         return false;
                     }
 
+                    var fcmData = BuildFcmData(title, body, data);
                     var message = new
                     {
                         message = new
                         {
                             token = token,
-                            data = new Dictionary<string, string>
-                            {
-                                { "title", title },
-                                { "body", body },
-                                { "payload", JsonSerializer.Serialize(data) }
-                            }
+                            data = fcmData
                         }
                     };
 
@@ -110,7 +106,7 @@ namespace SDM.Infrastructure.Services
             var payloadLegacy = new
             {
                 to = token,
-                data = new { title, body, payload = data }
+                data = BuildFcmData(title, body, data)
             };
 
             var jsonLegacy = JsonSerializer.Serialize(payloadLegacy);
@@ -127,6 +123,35 @@ namespace SDM.Infrastructure.Services
             }
 
             return response.IsSuccessStatusCode;
+        }
+
+        // Builds the flat string-to-string FCM data map.
+        // Puts title/body/commandId at the top level, then flattens any string properties
+        // from the extra data object so the Android agent can read packageName, url, etc. directly.
+        private static Dictionary<string, string> BuildFcmData(string title, string body, object data)
+        {
+            var serialized = JsonSerializer.Serialize(data);
+            var dict = new Dictionary<string, string>
+            {
+                { "title", title },
+                { "body", body },
+                { "payload", serialized }
+            };
+
+            try
+            {
+                using var doc = JsonDocument.Parse(serialized);
+                foreach (var prop in doc.RootElement.EnumerateObject())
+                {
+                    var val = prop.Value.ValueKind == JsonValueKind.String
+                        ? prop.Value.GetString() ?? string.Empty
+                        : prop.Value.ToString();
+                    dict.TryAdd(prop.Name, val);
+                }
+            }
+            catch { /* non-JSON payload: top-level keys already set */ }
+
+            return dict;
         }
 
         // Load service account JSON and generate OAuth2 access token using JWT assertion (server-to-server)
