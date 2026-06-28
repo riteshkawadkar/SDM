@@ -153,6 +153,7 @@ namespace SDM.Infrastructure.Services
             // reuse existing register logic if device exists
             var existing = await _db.Devices.FirstOrDefaultAsync(d => d.DeviceIdentifier == request.DeviceIdentifier);
             Device device;
+            bool isNewDevice = existing == null;
             if (existing != null)
             {
                 existing.SerialNumber = request.SerialNumber;
@@ -181,7 +182,6 @@ namespace SDM.Infrastructure.Services
                 _db.Devices.Add(device);
                 await _db.SaveChangesAsync();
 
-                // Audit
                 _db.AuditLogs.Add(new SDM.Domain.Entities.AuditLog
                 {
                     Id = Guid.NewGuid(),
@@ -195,26 +195,21 @@ namespace SDM.Infrastructure.Services
                 await _db.SaveChangesAsync();
             }
 
-            // If FCM token provided, register it for the device
+            // Register FCM token if provided, avoiding duplicates
             if (!string.IsNullOrWhiteSpace(request.FcmToken))
             {
-                _db.DevicePushTokens.Add(new SDM.Domain.Entities.DevicePushToken
-                {
-                    Id = Guid.NewGuid(),
-                    DeviceId = device.Id,
-                    Token = request.FcmToken,
-                    CreatedOn = DateTime.UtcNow,
-                    IsActive = true
-                });
-                await _db.SaveChangesAsync();
+                await RegisterPushTokenAsync(device.Id, request.FcmToken);
                 _logger.LogInformation("Registered FCM token for deviceId={deviceId}", device.Id);
             }
 
-            // decrement token usage
-            token.MaxDevices -= 1;
-            if (token.MaxDevices <= 0)
-                token.IsActive = false;
-            await _db.SaveChangesAsync();
+            // Only decrement the enrollment token slot for genuinely new devices
+            if (isNewDevice)
+            {
+                token.MaxDevices -= 1;
+                if (token.MaxDevices <= 0)
+                    token.IsActive = false;
+                await _db.SaveChangesAsync();
+            }
 
             _logger.LogInformation("Device registered successfully deviceId={deviceId} tokenSuffix={tokenSuffix}", device.Id, token.Token?.Length > 6 ? token.Token[^6..] : token.Token);
 
@@ -247,6 +242,32 @@ namespace SDM.Infrastructure.Services
             _logger.LogError(ex, "Error during RegisterWithToken for deviceIdentifier={deviceIdentifier}", request.DeviceIdentifier);
             throw;
         }
+        }
+
+        public async Task DeleteAsync(Guid deviceId)
+        {
+            var device = await _db.Devices.FindAsync(deviceId);
+            if (device == null) throw new Exception("Device not found");
+
+            // DeviceCommand and DeviceHeartbeat cascade via OnModelCreating.
+            // DevicePushToken has no cascade configured, so remove explicitly.
+            var pushTokens = _db.DevicePushTokens.Where(t => t.DeviceId == deviceId);
+            _db.DevicePushTokens.RemoveRange(pushTokens);
+
+            _db.Devices.Remove(device);
+
+            _db.AuditLogs.Add(new SDM.Domain.Entities.AuditLog
+            {
+                Id = Guid.NewGuid(),
+                Action = "DeviceDeleted",
+                EntityName = "Device",
+                EntityId = deviceId,
+                NewValue = System.Text.Json.JsonSerializer.Serialize(new { deviceId }),
+                Timestamp = DateTime.UtcNow
+            });
+
+            await _db.SaveChangesAsync();
+            _logger.LogInformation("Device deleted: deviceId={deviceId}", deviceId);
         }
     }
 }

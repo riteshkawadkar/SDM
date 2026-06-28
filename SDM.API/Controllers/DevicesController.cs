@@ -83,5 +83,19 @@ namespace SDM.API.Controllers
             if (device == null) return NotFound();
             return Ok(device);
         }
+
+        [HttpDelete("{id:guid}")]
+        public async Task<IActionResult> Delete([FromRoute] Guid id)
+        {
+            try
+            {
+                await _deviceService.DeleteAsync(id);
+                return NoContent();
+            }
+            catch (Exception ex) when (ex.Message == "Device not found")
+            {
+                return NotFound();
+            }
+        }
     }
 }

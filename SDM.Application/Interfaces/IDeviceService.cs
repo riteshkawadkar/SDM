@@ -14,5 +14,7 @@ namespace SDM.Application.Interfaces
         Task<IEnumerable<Device>> GetAllAsync();
 
         Task<DeviceRegisterWithTokenResponse> RegisterWithTokenAsync(DeviceRegisterWithTokenRequest request);
+
+        Task DeleteAsync(Guid deviceId);
     }
 }
