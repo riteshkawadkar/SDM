@@ -84,6 +84,7 @@ namespace SDM.API.Controllers
             return Ok(device);
         }
 
+        [AllowAnonymous]
         [HttpDelete("{id:guid}")]
         public async Task<IActionResult> Delete([FromRoute] Guid id)
         {
