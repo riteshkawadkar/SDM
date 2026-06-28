@@ -364,3 +364,7 @@ FodyWeavers.xsd
 
 # Android sample agent
 samples/
+
+# Firebase service account — never commit credentials
+**/firebase-sa.json
+**/firebase-sa.json.json
