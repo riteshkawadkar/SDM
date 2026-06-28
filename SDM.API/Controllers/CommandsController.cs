@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using SDM.Application.Interfaces;
+using System.Text.Json;
 
 namespace SDM.API.Controllers
 {
@@ -19,13 +20,18 @@ namespace SDM.API.Controllers
         public class CreateCommandRequest
         {
             public string CommandType { get; set; } = string.Empty;
-            public string Payload { get; set; } = string.Empty;
+            // Accepts a JSON string, object, or array — all stored as a JSON string internally.
+            public JsonElement Payload { get; set; }
         }
 
         [HttpPost]
         public async Task<IActionResult> Create([FromRoute] Guid deviceId, [FromBody] CreateCommandRequest request)
         {
-            var cmd = await _commandService.CreateCommandAsync(deviceId, request.CommandType, request.Payload);
+            var payloadStr = request.Payload.ValueKind == JsonValueKind.String
+                ? request.Payload.GetString() ?? string.Empty
+                : request.Payload.ToString();
+
+            var cmd = await _commandService.CreateCommandAsync(deviceId, request.CommandType, payloadStr);
             // Map to DTO to avoid circular JSON references
             var resp = new SDM.Application.DTOs.Command.CommandResponse
             {
