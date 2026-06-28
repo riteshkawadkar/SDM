@@ -9,4 +9,4 @@ done
 # Run migrations if needed (optional)
 # dotnet ef database update --project /src/SDM.Infrastructure/SDM.Infrastructure.csproj --startup-project /src/SDM.API/SDM.API.csproj
 
-exec dotnet SDM.API.dll --urls "http://+:5254;https://+:7288"
+exec dotnet SDM.API.dll --urls "http://+:5254"
