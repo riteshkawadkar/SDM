@@ -18,7 +18,6 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Build
-        working-directory: src/backend/SDM
         run: |
           dotnet restore SDM.slnx
           dotnet build SDM.slnx --no-restore -c Release
