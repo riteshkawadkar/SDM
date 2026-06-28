@@ -25,5 +25,24 @@ services:
     depends_on:
       - db
 
+    api:
+      build:
+        context: .
+        dockerfile: SDM.API/Dockerfile
+      container_name: sdm-api
+      restart: unless-stopped
+      environment:
+        DB_HOST: db
+        DB_PORT: 5432
+        DB_USER: sdm_user
+        ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=sdm_db;Username=sdm_user;Password=secret"
+      ports:
+        - "5254:5254"
+      depends_on:
+        - db
+      volumes:
+        - ./SDM.API/firebase-sa.json:/app/firebase-sa.json
+
+
 volumes:
   sdm_pgdata:
