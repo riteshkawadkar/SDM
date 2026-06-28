@@ -126,8 +126,9 @@ namespace SDM.Infrastructure.Services
         }
 
         // Builds the flat string-to-string FCM data map.
-        // Puts title/body/commandId at the top level, then flattens any string properties
-        // from the extra data object so the Android agent can read packageName, url, etc. directly.
+        // Outer object properties (e.g. commandId) and inner Swagger payload properties
+        // (e.g. packageName, url, minLength, blockedUrls) are all promoted to top-level keys
+        // so the Android agent can read them directly from data["key"].
         private static Dictionary<string, string> BuildFcmData(string title, string body, object data)
         {
             var serialized = JsonSerializer.Serialize(data);
@@ -141,12 +142,36 @@ namespace SDM.Infrastructure.Services
             try
             {
                 using var doc = JsonDocument.Parse(serialized);
+
+                // Promote outer properties (commandId, etc.)
                 foreach (var prop in doc.RootElement.EnumerateObject())
                 {
                     var val = prop.Value.ValueKind == JsonValueKind.String
                         ? prop.Value.GetString() ?? string.Empty
                         : prop.Value.ToString();
                     dict.TryAdd(prop.Name, val);
+                }
+
+                // Also promote the inner Swagger payload's fields (packageName, url,
+                // minLength, quality, blockedUrls, allowedUrls, etc.)
+                if (doc.RootElement.TryGetProperty("payload", out var innerEl) &&
+                    innerEl.ValueKind == JsonValueKind.String)
+                {
+                    var innerStr = innerEl.GetString();
+                    if (!string.IsNullOrEmpty(innerStr))
+                    {
+                        using var innerDoc = JsonDocument.Parse(innerStr);
+                        if (innerDoc.RootElement.ValueKind == JsonValueKind.Object)
+                        {
+                            foreach (var innerProp in innerDoc.RootElement.EnumerateObject())
+                            {
+                                var val = innerProp.Value.ValueKind == JsonValueKind.String
+                                    ? innerProp.Value.GetString() ?? string.Empty
+                                    : innerProp.Value.ToString();
+                                dict.TryAdd(innerProp.Name, val);
+                            }
+                        }
+                    }
                 }
             }
             catch { /* non-JSON payload: top-level keys already set */ }
