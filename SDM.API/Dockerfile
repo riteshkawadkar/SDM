@@ -23,7 +23,7 @@ COPY --from=build /app/publish ./
 COPY SDM.API/entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
-ENV ASPNETCORE_URLS="http://+:5254;https://+:7288"
+ENV ASPNETCORE_URLS="http://+:5254"
 
-EXPOSE 5254 7288
+EXPOSE 5254
 ENTRYPOINT ["/app/entrypoint.sh"]
